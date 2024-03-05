@@ -66,9 +66,23 @@ def create_train_data(env, train_range, batch=256, size=100, purpose="train"):
     np.save(f"data/{purpose}_output_{env}_{start}_{end}", train_set_output)
     return train_set_input, train_set_output
             
+def test_error(model, test_input, test_output, loss_fn):
+    l = -1
+    for i in range(1):
+        input = torch.tensor(test_input[i], dtype=torch.float32)
+        output = torch.tensor(test_output[i], dtype=torch.float32)
 
+        if use_cuda:
+            input = input.to(device)
+            output = output.to(device)
 
-# def create_test_data(env, range, batch=256, size=100):
+        pred = model(input)
+        loss = loss_fn(pred, output)
+        print(f"train loss: {loss.item()}")
+        print(f"train output: {output[0]}")
+        print(f"train prediction: {pred[0]}")
+        l = loss.item()
+    return l
 
 def train():
     
@@ -93,6 +107,8 @@ def train():
     test_input, test_output = create_train_data(env, [140, 200], batch, 1, "test")
 
     error_list = []
+    test_error_list = []
+    over_fit_cnt = 0
 
     #training
     for e in range(epoch):
@@ -111,8 +127,17 @@ def train():
             loss.backward()
             optimizer.step()
             sum_loss += loss.item()
-        print(f"epoch {e} loss: {sum_loss/iteration}")
-        error_list.append(sum_loss/iteration)
+        train_e = sum_loss/iteration
+        print(f"epoch {e} loss: {train_e}")
+        error_list.append(train_e)
+        test_e = test_error(model, test_input, test_output, loss_fn)
+        test_error_list.append(test_e)
+        if test_e > train_e * 1.3:
+            over_fit_cnt += 1
+        else:
+            over_fit_cnt = 0
+        if over_fit_cnt > 20:
+            break
     
     #plot error
     plt.plot(error_list)
@@ -120,19 +145,7 @@ def train():
     np.save(f"log/error_{env}_{h_size}", np.array(error_list))
 
     #testing
-    for i in range(1):
-        input = torch.tensor(test_input[i], dtype=torch.float32)
-        output = torch.tensor(test_output[i], dtype=torch.float32)
-
-        if use_cuda:
-            input = input.to(device)
-            output = output.to(device)
-
-        pred = model(input)
-        loss = loss_fn(pred, output)
-        print(f"train loss: {loss.item()}")
-        print(f"train output: {output[0]}")
-        print(f"train prediction: {pred[0]}")
+    print(f"final test error: {test_error(model, test_input, test_output, loss_fn)}")
     
     # save model
     torch.save(model, f"model/{env}/model_{h_size}.pth")
