@@ -3,8 +3,9 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.animation as animation
 import PIL
-import imageio
+import imageio.v2 as imageio
 import random
+import argparse
 
 class Spline:
 
@@ -16,14 +17,18 @@ class Spline:
         d = 0
         for i in range(len(self.L)-1):
             d += self.dist(self.L[i], self.L[i+1])
-            print(self.dist(self.L[i], self.L[i+1]))
+            # print(self.dist(self.L[i], self.L[i+1]))
         self.delta = d / (len(self.L)-1)
         self.V = np.zeros((len(self.L), 3))
         self.F = np.zeros((len(self.L), 3))
-        mag = res // 8
-        self.stiff_st = 300/mag
-        self.damp_st = 4.5/mag
-        self.stiff_bn = 10
+        if res == 8:
+            self.stiff_st = 300
+            self.damp_st = 4.5
+            self.stiff_bn = 10
+        elif res == 64:
+            self.stiff_st = 100
+            self.damp_st = 2.5
+            self.stiff_bn = 5
         self.T = 0
 
     def dist(self, p1, p2):
@@ -31,6 +36,7 @@ class Spline:
     
     def translate(self, p):
         self.L += p
+        self.P += p
 
     def vom(self):
         return np.mean(self.V, axis=0)
@@ -68,6 +74,7 @@ class Spline:
             y = np.sin(theta) * np.sin(phi)
             z = np.cos(theta)
             p.append(p[i] + np.array([x, y, z]))
+        self.P = p
         return p
 
     def inter_spline_5(self, p, res =1024):
@@ -148,6 +155,16 @@ class Spline:
 
         elif condi == "spring":
             for i in range(0, len(self.L)):
+                lim = 3
+                z = self.L[i][2]
+                if z > lim:
+                    self.F[i] += np.array([0, 0, -9.8])
+                else:
+                    coeff = 15
+                    self.F[i] += np.array([0, 0, (lim-z)**2]) * coeff
+
+        elif condi == "wave":
+            for i in range(0, len(self.L)):
                 z = self.L[i][2]
                 lim = np.sin(self.L[i][0] + self.L[i][1]) + 3
                 if z > lim:
@@ -155,32 +172,45 @@ class Spline:
                 else:
                     coeff = 15
                     self.F[i] += np.array([0, 0, (lim-z)**2]) * coeff
+        
+        elif condi == "wind":
+            center = np.array([1, 1])
+            for i in range(0, len(self.L)):
+                angle = np.arctan2(self.L[i][1] - center[1], self.L[i][0] - center[0])
+                dir = np.array([np.cos(angle), np.sin(angle)])
+                dis = np.linalg.norm(self.L[i][:2] - center)
+                spin = 10 * min(0, 2-dis)
+                attr = -2 * dis
+                f_x = np.sin(angle) * spin + dir[0] * attr
+                f_y = np.cos(angle) * spin + dir[1] * attr
+                lim = 3
+                if self.L[i][2] > lim:
+                    self.F[i] += np.array([f_x, f_y, -9.8])
+                else:
+                    self.F[i] += np.array([f_x, f_y, (lim-self.L[i][2])**2]) * 8
 
-    def update(self, t):
+
+    def update(self, t, env = "floor"):
         self.hook_op()
-        self.bend_op()
-        self.external_force(t, "spring")
+        # self.bend_op()
+        # self.external_force(t, "floor")
+        self.external_force(t, env)
 
         self.L += self.V * t
         self.V += self.F * t
         # print(self.F[1])
         self.F = np.zeros((len(self.L), 3))
 
-def main():
-    # random.seed(114514)
-    # random.seed(1145)
-    # random.seed(186)
-    # random.seed(186)
-    # random.seed(18)
-    # s = Spline([np.array([0.25,0,0]), np.array([0.5,0,1]), np.array([0.75,0,2]), np.array([0.5,0,3]),np.array([0.25,0,4])], res=8)
-    for sample in range(1):
+def create_sample(duration=80, gran=100, env="floor", sample=1, image=True):
+    for sample_ in range(sample):
+        Location = []
         s = Spline([], res=64)
-        s.translate(np.array([2, 2, 10]))
-        duration = 50
-        gran = 100
+        s.translate(np.array([random.uniform(0, 4), random.uniform(0, 4), random.uniform(4, 10)]))
+        Location.append(np.copy(s.L))
         for i in range(duration*gran):
-            s.update(.1/gran)
-            if i % gran == 0:
+            s.update(.1/gran, env)
+            Location.append(np.copy(s.L))
+            if i % gran == 0 and image:
                 fig = plt.figure()
                 ax = fig.add_subplot(111, projection='3d')
                 L = np.array(s.L)
@@ -199,12 +229,18 @@ def main():
                 #save to frame folder
                 plt.savefig('frames/frame' + str(i//gran) + '.png')
                 plt.close(fig)
-            # plt.show()
+                # plt.show()
         
-        image_list = []
-        for i in range(duration):
-            image_list.append(imageio.imread('frames/frame' + str(i) + '.png'))
-        imageio.mimsave(f'movie_{sample}.gif', image_list)
+        if image:
+            image_list = []
+            for i in range(duration):
+                image_list.append(imageio.imread('frames/frame' + str(i) + '.png'))
+            imageio.mimsave(f'clips/movie_{sample_}.gif', image_list)
+        np.save(f'data/start/spline_{env}_{sample_}.npy', np.array(s.P))
+        np.save(f'data/sim/location_{env}_{sample_}.npy', np.array(Location))
+
+def main():
+    create_sample(duration=40, gran=100, env="floor", sample=200, image=False)
 
 
 if __name__ == "__main__":
