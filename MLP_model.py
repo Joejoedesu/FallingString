@@ -127,24 +127,100 @@ def test_error(model, test_input, test_output, loss_fn):
         l = loss.item()
     return l
 
+def error_measure(output, ref):
+    assert len(output) == len(ref)
+    pos_e = 0
+    hk_e = 0
+    bd_e = 0
+
+    for i in range(len(output)):
+        pos_e += np.linalg.norm(output[i] - ref[i])
+
+    dist_ref_1 = np.linalg.norm(ref[2] - ref[0])
+    dist_ref_2 = np.linalg.norm(ref[0] - ref[1])
+
+    dist_out_1 = np.linalg.norm(output[2] - output[0])
+    dist_out_2 = np.linalg.norm(output[0] - output[1])
+
+    hk_e = abs(dist_out_1 - dist_ref_1) + abs(dist_out_2 - dist_ref_2)
+
+    n_ref_1 = (ref[2] - ref[0]) / dist_ref_1
+    n_ref_2 = (ref[0] - ref[1]) / dist_ref_2
+
+    n_out_1 = (output[2] - output[0]) / dist_out_1
+    n_out_2 = (output[0] - output[1]) / dist_out_2
+
+    bd_e = abs(np.dot(n_ref_1, n_ref_2) - np.dot(n_out_1, n_out_2))
+
+    return pos_e, hk_e, bd_e
+
 def quality_measure(env="floor", id=182, h_size=32, layer_num=1, gran = 80):
     sim_dir = f"sim/location_{env}_{id}"
     sim = np.load(data_dir + sim_dir + ".npy")
+    sta_dir = f"start/spline_{env}_{id}"
+    sta = np.load(data_dir + sta_dir + ".npy")
     L = len(sim[0])
     T = len(sim)
-    t_step = 1/gran
-    l_step = 1/L
-    error = 0
-    for i in range(gran+1):
-        t_pos = []
-        for j in range(L+1):
-            t = i * t_step
-            l = j * l_step
-            loc = sim[int(t * T)][int(l * L)]
-            gen_loc = gen[i][j]
-            error += np.linalg.norm(loc - gen_loc)
-    print(f"quality measure: {error/(gran+1)/(L+1)}")
-    return error/(gran+1)/(L+1)
+    sp_gran = 32
+    T_step = int(T/gran)
+    L_step = int(L/sp_gran)
+
+    model = torch.load(f"model/{env}/model_{h_size}_l{layer_num}.pth")
+    model.eval()
+    if use_cuda:
+        model.to(device)
+
+    pos_e = 0
+    hk_e = 0
+    bd_e = 0
+    i_c = 0
+    for i in range(0, T, T_step):
+        t = i * 1/T
+        j_c = 0
+        for j in range(1, L-1, L_step):
+            l = j * 1/L
+            l_l = (j-1) * 1/L
+            l_r = (j+1) * 1/L
+            sim_loc =sim[i][j]
+            sim_loc_l = sim[i][j-1]
+            sim_loc_r = sim[i][j+1]
+
+            gen_input = np.append(sta, [l, t])
+            gen_l_input = np.append(sta, [l_l, t])
+            gen_r_input = np.append(sta, [l_r, t])
+            gen_input = torch.tensor(gen_input, dtype=torch.float32)
+            gen_l_input = torch.tensor(gen_l_input, dtype=torch.float32)
+            gen_r_input = torch.tensor(gen_r_input, dtype=torch.float32)
+
+            if use_cuda:
+                gen_input = gen_input.to(device)
+                gen_l_input = gen_l_input.to(device)
+                gen_r_input = gen_r_input.to(device)
+            
+            gen_loc = model(gen_input)
+            gen_loc_l = model(gen_l_input)
+            gen_loc_r = model(gen_r_input)
+
+            gen_loc = gen_loc.cpu().detach().numpy()
+            gen_loc_l = gen_loc_l.cpu().detach().numpy()
+            gen_loc_r = gen_loc_r.cpu().detach().numpy()
+
+            pos_e_, hk_e_, bd_e_ = error_measure([gen_loc, gen_loc_l, gen_loc_r], [sim_loc, sim_loc_l, sim_loc_r])
+            pos_e += pos_e_
+            hk_e += hk_e_
+            bd_e += bd_e_
+
+            j_c += 1
+        i_c += 1
+
+    pos_e = pos_e / ((T//T_step) * ((L-2)//L_step))
+    hk_e = hk_e / ((T//T_step) * ((L-2)//L_step))
+    bd_e = bd_e / ((T//T_step) * ((L-2)//L_step))
+
+    print(f"position error: {pos_e}")
+    print(f"hook error: {hk_e}")
+    print(f"bend error: {bd_e}")
+    return pos_e, hk_e, bd_e
 
 def train(layer_num, h_size=64):
     

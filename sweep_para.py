@@ -15,5 +15,18 @@ def sweep_model():
                 MLP_model.generate_sample(env, id, h_size, layer_num)
                 vis_data.draw_data(index=id, sour="gen", gran=1, h_size=h_size, layer_num=layer_num)
 
+def quality_sweep():
+    h_sizes = [16, 64, 128, 256]
+    layer_nums = [1, 2, 3]
+    ids = [180, 182]
+    env = "floor"
+    for h_size in h_sizes:
+        for layer_num in layer_nums:
+            print(f"layer_num: {layer_num}, h_size: {h_size}")
+            for id in ids:
+                print(f"id: {id}")
+                MLP_model.quality_measure(env, id, h_size, layer_num)
+
 if __name__ == "__main__":
-    sweep_model()
+    # sweep_model()
+    quality_sweep()
