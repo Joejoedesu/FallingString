@@ -7,10 +7,9 @@ import imageio.v2 as imageio
 import os
 import subprocess
 
-def draw_data(index=0,sour="sim",gran=100):
-
+def draw_data(index=0, env='floor', sour="sim",gran=100, h_size=32, layer_num=1):
     dir = f"data/{sour}/"
-    file = f"location_floor_{index}"
+    file = f"location_{env}_{index}_{h_size}_l{layer_num}"
     data = np.load(dir + file + ".npy")
     for j in range(len(data)):
         if j % gran == 0:
@@ -32,7 +31,7 @@ def draw_data(index=0,sour="sim",gran=100):
     for j in range(40):
         image_list.append(imageio.imread('frames/frame' + str(j) + '.png'))
     # imageio.mimsave(f'movie_{file}.gif', image_list)
-    imageio.mimsave(f'clips/movie_{sour}_{index}_.gif', image_list)
+    imageio.mimsave(f'clips/movie_{sour}_{index}_early_{h_size}_l{layer_num}.gif', image_list)
 
 def confirm_start():
     sim_dir = "data/sim/"
@@ -55,5 +54,5 @@ def confirm_start():
 if __name__ == "__main__":
     id = 182
     # draw_data(index=id)
-    draw_data(index=id,sour="gen",gran=1)
+    draw_data(index=id,sour="gen",gran=1, h_size=32, layer_num=1)
     # confirm_start()
