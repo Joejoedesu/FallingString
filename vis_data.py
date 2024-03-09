@@ -7,9 +7,12 @@ import imageio.v2 as imageio
 import os
 import subprocess
 
-def draw_data(index=0, env='floor', sour="sim",gran=100, h_size=32, layer_num=1):
+def draw_data(index=0, env='floor', sour="sim",gran=100, h_size=32, layer_num=1, loss_method="3p"):
     dir = f"data/{sour}/"
-    file = f"location_{env}_{index}_{h_size}_l{layer_num}"
+    if sour == "sim":
+        file = f"location_{env}_{index}"
+    else:
+        file = f"location_{env}_{index}_{h_size}_l{layer_num}_{loss_method}"
     data = np.load(dir + file + ".npy")
     for j in range(len(data)):
         if j % gran == 0:
@@ -31,7 +34,10 @@ def draw_data(index=0, env='floor', sour="sim",gran=100, h_size=32, layer_num=1)
     for j in range(40):
         image_list.append(imageio.imread('frames/frame' + str(j) + '.png'))
     # imageio.mimsave(f'movie_{file}.gif', image_list)
-    imageio.mimsave(f'clips/movie_{sour}_{index}_early_{h_size}_l{layer_num}.gif', image_list)
+    if sour == "sim":
+        imageio.mimsave(f'clips/movie_{sour}_{env}_{index}.gif', image_list)
+    else:
+        imageio.mimsave(f'clips/movie_{sour}_{env}_{index}_early_{h_size}_l{layer_num}_{loss_method}.gif', image_list)
 
 def confirm_start():
     sim_dir = "data/sim/"
@@ -54,5 +60,10 @@ def confirm_start():
 if __name__ == "__main__":
     id = 182
     # draw_data(index=id)
-    draw_data(index=id,sour="gen",gran=1, h_size=32, layer_num=1)
+    # draw_data(index=id,sour="gen",gran=1, h_size=32, layer_num=1)
     # confirm_start()
+    # draw_data(index=181, env='wind', sour="gen", gran=1, h_size=64, layer_num=3, loss_method="3p")
+    draw_data(index=186, env='wind', sour="sim", gran=100, h_size=256, layer_num=3, loss_method="3p")
+    draw_data(index=189, env='wind', sour="sim", gran=100, h_size=256, layer_num=3, loss_method="3p")
+    draw_data(index=194, env='wind', sour="sim", gran=100, h_size=256, layer_num=3, loss_method="3p")
+    draw_data(index=195, env='wind', sour="sim", gran=100, h_size=256, layer_num=3, loss_method="3p")

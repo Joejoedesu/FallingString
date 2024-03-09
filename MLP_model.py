@@ -73,6 +73,58 @@ class MLP_3L(nn.Module):
         x = self.linear4(x)
         return x
 
+def create_train_data_3p(env, train_range, batch=256, size=100, purpose="train"):
+    start = train_range[0]
+    end = train_range[1] - 1
+    train_set_input = []
+    train_set_output = []
+    for i in range(size):
+        print(f"creating {purpose} data {i}/{size}")
+        S_input = []
+        S_output = []
+        for j in range(batch):
+            id = random.randint(start, end) #include
+            #load from data directory
+            sim_dir = f"sim/location_{env}_{id}"
+            sta_dir = f"start/spline_{env}_{id}"
+            sim = np.load(data_dir + sim_dir + ".npy")
+            sta = np.load(data_dir + sta_dir + ".npy")
+            L = len(sim[0])
+            T = len(sim)
+            # print(L, T)
+            l = random.uniform(0, 1)
+            t = random.uniform(0, 1)
+            l_index = int((L - 1) * l)
+            t_index = int((T - 1) * t)
+            if l_index == 0:
+                l_index = 1
+            if l_index == L - 1:
+                l_index = L - 2
+            l = l_index / (L - 1)
+            t = t_index / (T - 1)
+
+            loc = sim[t_index][l_index]
+            loc_l = sim[t_index][l_index - 1]
+            loc_r = sim[t_index][l_index + 1]
+            l_l = (l_index - 1) / (L - 1)
+            l_r = (l_index + 1) / (L - 1)
+            d1 = np.linalg.norm(loc_r - loc)
+            d2 = np.linalg.norm(loc_l - loc)
+            angle = np.dot(loc_r - loc, loc_l - loc) / (d1 * d2)
+            loc = np.append(loc, [d1, d2, angle])
+            S_output.append(loc)
+            sta = sta.flatten()
+            extra = [l, t, l_l, l_r]
+            sta = np.append(sta, extra)
+            S_input.append(sta)
+        S_input = np.array(S_input)
+        S_output = np.array(S_output)
+        train_set_input.append(S_input)
+        train_set_output.append(S_output)
+    np.save(f"data/{purpose}_input_{env}_{start}_{end}_3p", train_set_input)
+    np.save(f"data/{purpose}_output_{env}_{start}_{end}_3p", train_set_output)
+    return train_set_input, train_set_output
+
 def create_train_data(env, train_range, batch=256, size=100, purpose="train"):
     start = train_range[0]
     end = train_range[1] - 1
@@ -109,23 +161,84 @@ def create_train_data(env, train_range, batch=256, size=100, purpose="train"):
     np.save(f"data/{purpose}_output_{env}_{start}_{end}", train_set_output)
     return train_set_input, train_set_output
             
-def test_error(model, test_input, test_output, loss_fn):
+def test_error(model, test_input, test_output, loss_fn, loss_method="1p"):
     l = -1
-    for i in range(1):
-        input = torch.tensor(test_input[i], dtype=torch.float32)
-        output = torch.tensor(test_output[i], dtype=torch.float32)
+    if loss_method == "1p":
+        for i in range(1):
+            input = torch.tensor(test_input[i], dtype=torch.float32)
+            output = torch.tensor(test_output[i], dtype=torch.float32)
 
-        if use_cuda:
-            input = input.to(device)
-            output = output.to(device)
+            if use_cuda:
+                input = input.to(device)
+                output = output.to(device)
 
-        pred = model(input)
-        loss = loss_fn(pred, output)
-        print(f"train loss: {loss.item()}")
-        # print(f"train output: {output[0]}")
-        # print(f"train prediction: {pred[0]}")
-        l = loss.item()
+            pred = model(input)
+            loss = loss_fn(pred, output)
+            print(f"train loss: {loss.item()}")
+            # print(f"train output: {output[0]}")
+            # print(f"train prediction: {pred[0]}")
+            l = loss.item()
+    elif loss_method == "3p":
+        for i in range(1):
+            input = torch.tensor(test_input[i], dtype=torch.float32)
+            output = torch.tensor(test_output[i], dtype=torch.float32)
+            indice_start = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+            
+            start = torch.index_select(input, 1, indice_start)
+            l = torch.select(input, 1, 15).reshape(-1, 1)
+            t = torch.select(input, 1, 16).reshape(-1, 1)
+            l_l = torch.select(input, 1, 17).reshape(-1, 1)
+            l_r = torch.select(input, 1, 18).reshape(-1, 1)
+
+            # print(start.shape, l.shape, t.shape, l_l.shape, l_r.shape)
+
+            input = torch.cat((start, l, t), 1)
+            input_l = torch.cat((start, l_l, t), 1)
+            input_r = torch.cat((start, l_r, t), 1)
+
+            if use_cuda:
+                input = input.to(device)
+                input_l = input_l.to(device)
+                input_r = input_r.to(device)
+                output = output.to(device)
+            
+            pred = model(input)
+            pred_l = model(input_l)
+            pred_r = model(input_r)
+
+            loss, loc_e, hk_e, angle_e = loss_fn(pred, pred_l, pred_r, output)
+            print(f"train loss: {loss.item()}")
+            l = loss.item()
     return l
+
+def loss_3p(pred, pred_l, pred_r, output):
+    select_i = torch.tensor([0, 1, 2])
+    if use_cuda:
+        select_i = select_i.to(device)
+    loc = torch.index_select(output, 1, select_i)
+    d1 = torch.select(output, 1, 3).reshape(-1, 1)
+    d2 = torch.select(output, 1, 4).reshape(-1, 1)
+    angle = torch.select(output, 1, 5).reshape(-1, 1)
+
+    loc_e = torch.norm(torch.sub(pred, loc), dim=1)
+
+    D1 = torch.sub(pred_r, pred)
+    D2 = torch.sub(pred_l, pred)
+    D1_l = torch.norm(D1, dim=1).reshape(-1, 1)
+    D2_l = torch.norm(D2, dim=1).reshape(-1, 1)
+    hk_e = torch.abs(torch.sub(D1_l, d1)) + torch.abs(torch.sub(D2_l, d2))
+
+    dot_12 = torch.sum(torch.mul(D1, D2), dim=1).reshape(-1, 1)
+    angle_e = torch.abs(torch.sub(dot_12, angle))
+
+    # loc_e = torch.mean(loc_e)
+    # hk_e = torch.mean(hk_e)
+    # angle_e = torch.mean(angle_e)
+
+    # total_loss = loc_e + hk_e + angle_e
+    total_loss = loc_e + angle_e
+    total_loss = torch.mean(total_loss)
+    return total_loss, loc_e, hk_e, angle_e
 
 def error_measure(output, ref):
     assert len(output) == len(ref)
@@ -154,7 +267,7 @@ def error_measure(output, ref):
 
     return pos_e, hk_e, bd_e
 
-def quality_measure(env="floor", id=182, h_size=32, layer_num=1, gran = 80):
+def quality_measure(env="floor", id=182, h_size=32, layer_num=1, gran = 80, loss_method="1p"):
     sim_dir = f"sim/location_{env}_{id}"
     sim = np.load(data_dir + sim_dir + ".npy")
     sta_dir = f"start/spline_{env}_{id}"
@@ -165,7 +278,10 @@ def quality_measure(env="floor", id=182, h_size=32, layer_num=1, gran = 80):
     T_step = int(T/gran)
     L_step = int(L/sp_gran)
 
-    model = torch.load(f"model/{env}/model_{h_size}_l{layer_num}.pth")
+    if loss_method == "1p":
+        model = torch.load(f"model/{env}/model_{h_size}_l{layer_num}.pth")
+    elif loss_method == "3p":
+        model = torch.load(f"model/{env}/model_{h_size}_l{layer_num}_{loss_method}.pth")
     model.eval()
     if use_cuda:
         model.to(device)
@@ -222,7 +338,7 @@ def quality_measure(env="floor", id=182, h_size=32, layer_num=1, gran = 80):
     print(f"bend error: {bd_e}")
     return pos_e, hk_e, bd_e
 
-def train(layer_num, h_size=64):
+def train(layer_num, env='floor', h_size=64, iteration=100, loss_method="1p"):
     
     i_size = 5*3 + 2 # 5 points with 3 coordinates + time + interpolated points
     o_size = 3 # single coordinate
@@ -240,25 +356,35 @@ def train(layer_num, h_size=64):
     if use_cuda:
         model.to(device)
 
-    batch = 256
-    iteration = 4096
-    epoch = 500
-    env = "floor"
+    # batch = 256
+    # iteration = 4096
+    # epoch = 500
+    epoch = 200
 
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.0001)
     # loss_fn = nn.MSELoss()
-    loss_fn = nn.L1Loss()
-
+    if loss_method == "1p":
+        loss_fn = nn.L1Loss()
+    elif loss_method == "3p":
+        loss_fn = loss_3p
     # train_input, train_output = create_train_data(env, [0, 140], batch, iteration, "train")
     # test_input, test_output = create_train_data(env, [140, 200], batch, 1, "test")
-    train_input = np.load(f"data/train_input_{env}_0_139.npy")
-    train_output = np.load(f"data/train_output_{env}_0_139.npy")
-    test_input = np.load(f"data/test_input_{env}_140_199.npy")
-    test_output = np.load(f"data/test_output_{env}_140_199.npy")
+    
+    if loss_method == "1p":
+        train_input = np.load(f"data/train_input_{env}_0_139.npy")
+        train_output = np.load(f"data/train_output_{env}_0_139.npy")
+        test_input = np.load(f"data/test_input_{env}_140_199.npy")
+        test_output = np.load(f"data/test_output_{env}_140_199.npy")
+    elif loss_method == "3p":
+        train_input = np.load(f"data/train_input_{env}_0_139_3p.npy")
+        train_output = np.load(f"data/train_output_{env}_0_139_3p.npy")
+        test_input = np.load(f"data/test_input_{env}_140_199_3p.npy")
+        test_output = np.load(f"data/test_output_{env}_140_199_3p.npy")
 
     error_list = []
     test_error_list = []
-    over_fit_cnt = 0
+    ave_test_error = []
+    over_f_c = 0
 
     #training
     for e in range(epoch):
@@ -267,46 +393,93 @@ def train(layer_num, h_size=64):
             input = torch.tensor(train_input[i], dtype=torch.float32)
             output = torch.tensor(train_output[i], dtype=torch.float32)
 
-            if use_cuda:
-                input = input.to(device)
-                output = output.to(device)
 
-            optimizer.zero_grad()
-            pred = model(input)
-            loss = loss_fn(pred, output)
-            loss.backward()
-            optimizer.step()
-            sum_loss += loss.item()
+            if loss_method == "3p":
+                # print(input.shape, output.shape)
+                # print(input)
+                indice_start = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+                
+                start = torch.index_select(input, 1, indice_start)
+                l = torch.select(input, 1, 15).reshape(-1, 1)
+                t = torch.select(input, 1, 16).reshape(-1, 1)
+                l_l = torch.select(input, 1, 17).reshape(-1, 1)
+                l_r = torch.select(input, 1, 18).reshape(-1, 1)
+
+                # print(start.shape, l.shape, t.shape, l_l.shape, l_r.shape)
+
+                input = torch.cat((start, l, t), 1)
+                input_l = torch.cat((start, l_l, t), 1)
+                input_r = torch.cat((start, l_r, t), 1)
+
+                # print(input)
+                # print(input_l)
+                # print(input_r)
+                # print(output.shape)
+
+                if use_cuda:
+                    input = input.to(device)
+                    input_l = input_l.to(device)
+                    input_r = input_r.to(device)
+                    output = output.to(device)
+                
+                optimizer.zero_grad()
+                pred = model(input)
+                pred_l = model(input_l)
+                pred_r = model(input_r)
+
+                loss, loc_e, hk_e, angle_e = loss_fn(pred, pred_l, pred_r, output)
+                loss.backward()
+                optimizer.step()
+                sum_loss += loss.item()
+            
+            else:
+                if use_cuda:
+                    input = input.to(device)
+                    output = output.to(device)
+
+                optimizer.zero_grad()
+                pred = model(input)
+                loss = loss_fn(pred, output)
+                loss.backward()
+                optimizer.step()
+                sum_loss += loss.item()
         train_e = sum_loss/iteration
         print(f"epoch {e} loss: {train_e}")
         error_list.append(train_e)
-        test_e = test_error(model, test_input, test_output, loss_fn)
+        test_e = test_error(model, test_input, test_output, loss_fn, loss_method)
         test_error_list.append(test_e)
-        if test_e > train_e * 1.5:
-            over_fit_cnt += 1
+        if e > 11:
+            if sum(test_error_list[-10:]) > 1.05 * sum(test_error_list[-11:-1]):
+                break
+        if test_e > 1.2 * train_e:
+            over_f_c += 1
         else:
-            over_fit_cnt = 0
-        if over_fit_cnt > 15:
+            over_f_c = 0
+        if over_f_c > 5:
             break
     
     #plot error
     plt.plot(error_list)
     plt.plot(test_error_list)
     plt.legend(["train", "test"])
+    plt.close()
     # plt.show()
-    np.save(f"log/error_{env}_{h_size}_l{layer_num}", np.array(error_list))
-    np.save(f"log/test_error_{env}_{h_size}_l{layer_num}", np.array(test_error_list))
+    np.save(f"log/error_{env}_{h_size}_l{layer_num}_{loss_method}", np.array(error_list))
+    np.save(f"log/test_error_{env}_{h_size}_l{layer_num}_{loss_method}", np.array(test_error_list))
 
     #testing
-    print(f"final test error: {test_error(model, test_input, test_output, loss_fn)}")
+    print(f"final test error: {test_error(model, test_input, test_output, loss_fn, loss_method)}")
     
     # save model
-    torch.save(model, f"model/{env}/model_{h_size}_l{layer_num}.pth")
+    torch.save(model, f"model/{env}/model_{h_size}_l{layer_num}_{loss_method}.pth")
 
     
-def generate_sample(env="floor", id=182, h_size=32, layer_num=1):
+def generate_sample(env="floor", id=182, h_size=32, layer_num=1, loss_method="1p"):
     # model = torch.load(f"model/{env}/model_{h_size}.pth")
-    model = torch.load(f"model/{env}/model_{h_size}_l{layer_num}.pth")
+    if loss_method == "1p":
+        model = torch.load(f"model/{env}/model_{h_size}_l{layer_num}.pth")
+    elif loss_method == "3p":
+        model = torch.load(f"model/{env}/model_{h_size}_l{layer_num}_{loss_method}.pth")
     model.eval()
     if use_cuda:
         model.to(device)
@@ -317,7 +490,7 @@ def generate_sample(env="floor", id=182, h_size=32, layer_num=1):
     # gran = 100
     # sim = np.load(data_dir + f"sim/location_{env}_{id}.npy")
     # L = len(sim[0])
-    gran = 80
+    gran = 40
     t_step = 1/gran
     L = 15
     l_step = 1/L
@@ -335,7 +508,11 @@ def generate_sample(env="floor", id=182, h_size=32, layer_num=1):
             pred = model(input)
             t_pos.append(pred.cpu().detach().numpy())
         gen.append(t_pos)
-    np.save(f"data/gen/location_{env}_{id}_{h_size}_l{layer_num}", np.array(gen))
+    np.save(f"data/gen/location_{env}_{id}_{h_size}_l{layer_num}_{loss_method}", np.array(gen))
     
 # train()
 # generate_sample()
+# create_train_data_3p("spring", [0, 140], 256, 128, "train")
+# create_train_data_3p("spring", [140, 200], 256, 1, "test")
+# train(layer_num=2, h_size=64, iteration=100, loss_method="3p")
+# train(2, 64, "1p")

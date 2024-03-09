@@ -179,8 +179,8 @@ class Spline:
                 angle = np.arctan2(self.L[i][1] - center[1], self.L[i][0] - center[0])
                 dir = np.array([np.cos(angle), np.sin(angle)])
                 dis = np.linalg.norm(self.L[i][:2] - center)
-                spin = 10 * min(0, 2-dis)
-                attr = -2 * dis
+                spin = 0.5 * min(0, 2-dis)
+                attr = -0.5 * dis
                 f_x = np.sin(angle) * spin + dir[0] * attr
                 f_y = np.cos(angle) * spin + dir[1] * attr
                 lim = 3
@@ -235,12 +235,12 @@ def create_sample(duration=80, gran=100, env="floor", sample=1, image=True):
             image_list = []
             for i in range(duration):
                 image_list.append(imageio.imread('frames/frame' + str(i) + '.png'))
-            imageio.mimsave(f'clips/movie_{sample_}.gif', image_list)
+            imageio.mimsave(f'clips/movie_{env}_{sample_}.gif', image_list)
         np.save(f'data/start/spline_{env}_{sample_}.npy', np.array(s.P))
         np.save(f'data/sim/location_{env}_{sample_}.npy', np.array(Location))
 
 def main():
-    create_sample(duration=40, gran=100, env="floor", sample=200, image=False)
+    create_sample(duration=40, gran=100, env="wind", sample=200, image=True)
 
 
 if __name__ == "__main__":
