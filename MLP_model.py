@@ -240,43 +240,44 @@ def loss_3p(pred, pred_l, pred_r, output):
     total_loss = torch.mean(total_loss)
     return total_loss, loc_e, hk_e, angle_e
 
-def error_measure(output, ref):
-    assert len(output) == len(ref)
-    pos_e = 0
-    hk_e = 0
-    bd_e = 0
+def error_measure(output, ref, last=False):
+    loc_e = np.linalg.norm(output[0] - ref[0], axis=1)
+    
+    com_out = np.mean(output[0], axis=0)
+    com_ref = np.mean(ref[0], axis=0)
+    com_e = np.linalg.norm(com_out - com_ref)
 
-    for i in range(len(output)):
-        pos_e += np.linalg.norm(output[i] - ref[i])
+    # length error
+    L = 0
+    L_ref = 0
+    for i in range(len(output[0]) - 1):
+        l = np.linalg.norm(output[0][i+1] - output[0][i])
+        l_ref = np.linalg.norm(ref[0][i+1] - ref[0][i])
+        L += l
+        L_ref += l_ref
+    L_e = np.abs(L - L_ref)
 
-    dist_ref_1 = np.linalg.norm(ref[2] - ref[0])
-    dist_ref_2 = np.linalg.norm(ref[0] - ref[1])
+    if last:
+        return [loc_e, com_e, L_e]
+    else:
+        v1 = output[1] - output[0]
+        v2 = ref[1] - ref[0]
+        vel_e = np.linalg.norm(v1 - v2, axis=1)
+        return [loc_e, com_e, L_e, vel_e]
 
-    dist_out_1 = np.linalg.norm(output[2] - output[0])
-    dist_out_2 = np.linalg.norm(output[0] - output[1])
-
-    hk_e = abs(dist_out_1 - dist_ref_1) + abs(dist_out_2 - dist_ref_2)
-
-    n_ref_1 = (ref[2] - ref[0]) / dist_ref_1
-    n_ref_2 = (ref[0] - ref[1]) / dist_ref_2
-
-    n_out_1 = (output[2] - output[0]) / dist_out_1
-    n_out_2 = (output[0] - output[1]) / dist_out_2
-
-    bd_e = abs(np.dot(n_ref_1, n_ref_2) - np.dot(n_out_1, n_out_2))
-
-    return pos_e, hk_e, bd_e
-
-def quality_measure(env="floor", id=182, h_size=32, layer_num=1, gran = 80, loss_method="1p"):
+def quality_measure(env="floor", id=182, h_size=32, layer_num=1, gran = 100, loss_method="1p"):
     sim_dir = f"sim/location_{env}_{id}"
     sim = np.load(data_dir + sim_dir + ".npy")
     sta_dir = f"start/spline_{env}_{id}"
     sta = np.load(data_dir + sta_dir + ".npy")
-    L = len(sim[0])
-    T = len(sim)
-    sp_gran = 32
-    T_step = int(T/gran)
-    L_step = int(L/sp_gran)
+    
+    # select all dim 0 with i % 100 == 0
+    sim = sim[::gran]
+    L = len(sim[0]) - 1
+    T = len(sim) - 1
+
+    T_step = 1/T
+    L_step = 1/L
 
     if loss_method == "1p":
         model = torch.load(f"model/{env}/model_{h_size}_l{layer_num}.pth")
@@ -286,57 +287,67 @@ def quality_measure(env="floor", id=182, h_size=32, layer_num=1, gran = 80, loss
     if use_cuda:
         model.to(device)
 
-    pos_e = 0
-    hk_e = 0
-    bd_e = 0
-    i_c = 0
-    for i in range(0, T, T_step):
-        t = i * 1/T
-        j_c = 0
-        for j in range(1, L-1, L_step):
-            l = j * 1/L
-            l_l = (j-1) * 1/L
-            l_r = (j+1) * 1/L
-            sim_loc =sim[i][j]
-            sim_loc_l = sim[i][j-1]
-            sim_loc_r = sim[i][j+1]
+    pos_error_list = []
+    vel_error_list = []
+    com_error_list = []
+    len_error_list = []
+    for i in range(0, T + 1):
+        t = i * T_step
+        gen_loc = []
+        gen_loc_n = []
+        for j in range(0, L + 1):
+            l = j * L_step
 
             gen_input = np.append(sta, [l, t])
-            gen_l_input = np.append(sta, [l_l, t])
-            gen_r_input = np.append(sta, [l_r, t])
+            gen_input_n = np.append(sta, [l, t + T_step])
             gen_input = torch.tensor(gen_input, dtype=torch.float32)
-            gen_l_input = torch.tensor(gen_l_input, dtype=torch.float32)
-            gen_r_input = torch.tensor(gen_r_input, dtype=torch.float32)
+            gen_input_n = torch.tensor(gen_input_n, dtype=torch.float32)
 
             if use_cuda:
                 gen_input = gen_input.to(device)
-                gen_l_input = gen_l_input.to(device)
-                gen_r_input = gen_r_input.to(device)
+                gen_input_n = gen_input_n.to(device)
             
-            gen_loc = model(gen_input)
-            gen_loc_l = model(gen_l_input)
-            gen_loc_r = model(gen_r_input)
+            gen_loc_t = model(gen_input)
+            gen_loc_n_t = model(gen_input_n)
 
-            gen_loc = gen_loc.cpu().detach().numpy()
-            gen_loc_l = gen_loc_l.cpu().detach().numpy()
-            gen_loc_r = gen_loc_r.cpu().detach().numpy()
+            gen_loc_t = gen_loc_t.cpu().detach().numpy()
+            gen_loc_n_t = gen_loc_n_t.cpu().detach().numpy()
 
-            pos_e_, hk_e_, bd_e_ = error_measure([gen_loc, gen_loc_l, gen_loc_r], [sim_loc, sim_loc_l, sim_loc_r])
-            pos_e += pos_e_
-            hk_e += hk_e_
-            bd_e += bd_e_
+            gen_loc.append(gen_loc_t)
+            gen_loc_n.append(gen_loc_n_t)
 
-            j_c += 1
-        i_c += 1
+        gen_loc = np.array(gen_loc)
+        gen_loc_n = np.array(gen_loc_n)
+        if i < T:
+            e_ = error_measure([gen_loc, gen_loc_n], [sim[i], sim[i+1]], last=False)
+            pos_error_list.append(e_[0])
+            com_error_list.append(e_[1])
+            len_error_list.append(e_[2])
+            vel_error_list.append(e_[3])
+        else:
+            e_ = error_measure([gen_loc], [sim[i]], last=True)
+            pos_error_list.append(e_[0])
+            com_error_list.append(e_[1])
+            len_error_list.append(e_[2])
+            
+                
+    # save to log dir
+    np.save(f"log/detailed/pos_error_{env}_{id}_{h_size}_l{layer_num}_{loss_method}", np.array(pos_error_list))
+    np.save(f"log/detailed/vel_error_{env}_{id}_{h_size}_l{layer_num}_{loss_method}", np.array(vel_error_list))
+    np.save(f"log/detailed/com_error_{env}_{id}_{h_size}_l{layer_num}_{loss_method}", np.array(com_error_list))
+    np.save(f"log/detailed/len_error_{env}_{id}_{h_size}_l{layer_num}_{loss_method}", np.array(len_error_list))
 
-    pos_e = pos_e / ((T//T_step) * ((L-2)//L_step))
-    hk_e = hk_e / ((T//T_step) * ((L-2)//L_step))
-    bd_e = bd_e / ((T//T_step) * ((L-2)//L_step))
+    pos_error_ave = np.mean(pos_error_list, axis=1)
+    vel_error_ave = np.mean(vel_error_list, axis=1)
 
-    print(f"position error: {pos_e}")
-    print(f"hook error: {hk_e}")
-    print(f"bend error: {bd_e}")
-    return pos_e, hk_e, bd_e
+    # plot error
+    # plt.plot(pos_error_ave)
+    # plt.plot(vel_error_ave)
+    # plt.plot(com_error_list)
+    # plt.plot(len_error_list)
+    # plt.legend(["pos", "vel", "com", "len"])
+    # plt.show()
+    return pos_error_ave, vel_error_ave, com_error_list, len_error_list
 
 def train(layer_num, env='floor', h_size=64, iteration=100, loss_method="1p"):
     
@@ -474,7 +485,7 @@ def train(layer_num, env='floor', h_size=64, iteration=100, loss_method="1p"):
     torch.save(model, f"model/{env}/model_{h_size}_l{layer_num}_{loss_method}.pth")
 
     
-def generate_sample(env="floor", id=182, h_size=32, layer_num=1, loss_method="1p"):
+def generate_sample(env="floor", id=182, h_size=32, layer_num=1, loss_method="1p", ext=False):
     # model = torch.load(f"model/{env}/model_{h_size}.pth")
     if loss_method == "1p":
         model = torch.load(f"model/{env}/model_{h_size}_l{layer_num}.pth")
@@ -483,7 +494,10 @@ def generate_sample(env="floor", id=182, h_size=32, layer_num=1, loss_method="1p
     model.eval()
     if use_cuda:
         model.to(device)
-    sta_dir = f"start/spline_{env}_{id}"
+    if ext:
+        sta_dir = f"start/spline_{env}_{id}_ext"
+    else:
+        sta_dir = f"start/spline_{env}_{id}"
     sta = np.load(data_dir + sta_dir + ".npy")
     sta = sta.flatten()
     sta = np.append(sta, [0, 0])
@@ -495,7 +509,10 @@ def generate_sample(env="floor", id=182, h_size=32, layer_num=1, loss_method="1p
     L = 15
     l_step = 1/L
     gen = []
-    for i in range(gran+1):
+    T_range = gran + 1
+    if ext:
+        T_range = gran*2 + 1
+    for i in range(T_range):
         t_pos = []
         for j in range(L+1):
             t = i * t_step
@@ -508,8 +525,17 @@ def generate_sample(env="floor", id=182, h_size=32, layer_num=1, loss_method="1p
             pred = model(input)
             t_pos.append(pred.cpu().detach().numpy())
         gen.append(t_pos)
-    np.save(f"data/gen/location_{env}_{id}_{h_size}_l{layer_num}_{loss_method}", np.array(gen))
-    
+    if ext:
+        np.save(f"data/gen/location_{env}_{id}_{h_size}_l{layer_num}_{loss_method}_ext", np.array(gen))
+    else:
+        np.save(f"data/gen/location_{env}_{id}_{h_size}_l{layer_num}_{loss_method}", np.array(gen))
+
+
+if __name__ == "__main__":
+    generate_sample(env="spring", id=0, h_size=128, layer_num=3, loss_method="3p", ext=True)
+    # quality_measure(env="spring", h_size=64, layer_num=2, loss_method="3p")
+
+
 # train()
 # generate_sample()
 # create_train_data_3p("spring", [0, 140], 256, 128, "train")

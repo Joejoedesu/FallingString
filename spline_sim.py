@@ -235,13 +235,13 @@ def create_sample(duration=80, gran=100, env="floor", sample=1, image=True):
             image_list = []
             for i in range(duration):
                 image_list.append(imageio.imread('frames/frame' + str(i) + '.png'))
-            imageio.mimsave(f'clips/movie_{env}_{sample_}.gif', image_list)
-        np.save(f'data/start/spline_{env}_{sample_}.npy', np.array(s.P))
-        np.save(f'data/sim/location_{env}_{sample_}.npy', np.array(Location))
+            imageio.mimsave(f'clips/movie_{env}_{sample_}_ext.gif', image_list)
+        np.save(f'data/start/spline_{env}_{sample_}_ext.npy', np.array(s.P))
+        np.save(f'data/sim/location_{env}_{sample_}_ext.npy', np.array(Location))
 
 def main():
-    create_sample(duration=40, gran=100, env="wind", sample=200, image=True)
-
+    # create_sample(duration=40, gran=100, env="wind", sample=200, image=True)
+    create_sample(duration=80, gran=100, env="spring", sample=1, image=True)
 
 if __name__ == "__main__":
     main()
